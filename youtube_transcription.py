@@ -13,8 +13,11 @@ ASSEMBLYAI_API_KEY = "a86179f5b73045fb878609759958081e"  # 替换为你的API密
 # DeepSeek API密钥
 DEEPSEEK_API_KEY = "sk-b4d8ce9a5fe6429da61e1aba29219edd"
 
+# 输出目录
+OUTPUT_DIR = "output"
+
 def get_video_links():
-    """从videos.txt文件中读取YouTube链接"""
+    """从videos.txt文件中读取视频链接"""
     with open('videos.txt', 'r') as file:
         # 移除行尾空白和空行
         links = [line.strip() for line in file.readlines() if line.strip()]
@@ -24,12 +27,30 @@ def clean_filename(title):
     """清理文件名，替换不合法字符"""
     return re.sub(r'[\\/*?:"<>|]', '_', title)
 
+def identify_platform(link):
+    """识别链接来自哪个平台"""
+    if 'youtube.com' in link or 'youtu.be' in link:
+        return 'youtube'
+    elif 'douyin.com' in link or 'tiktok.com' in link or 'iesdouyin.com' in link:
+        return 'douyin'
+    else:
+        return 'unknown'
+
 def download_audio(link, output_dir):
-    """使用yt-dlp下载YouTube视频的音频部分"""
+    """下载视频的音频部分，支持YouTube和抖音"""
     try:
         print(f"正在获取视频信息: {link}")
         
-        # 首先获取视频的标题
+        # 识别视频平台
+        platform = identify_platform(link)
+        if platform == 'unknown':
+            print(f"警告: 未知的视频平台链接: {link}")
+            print("目前仅支持YouTube和抖音链接")
+            return None, None
+        
+        print(f"识别为{platform}视频链接")
+        
+        # 获取视频标题
         result = subprocess.run(
             ['yt-dlp', '--print', 'title', '--no-playlist', link],
             capture_output=True, text=True, check=True
@@ -43,18 +64,31 @@ def download_audio(link, output_dir):
         
         # 使用yt-dlp下载仅音频并转换为mp3
         print(f"正在下载音频...")
-        subprocess.run([
+        
+        # 对于抖音，可能需要添加额外的选项以处理重定向
+        cmd = [
             'yt-dlp',
             '-x',  # 提取音频
             '--audio-format', 'mp3',  # 转换为mp3
             '--audio-quality', '0',  # 最佳质量
             '-o', output_file,
             '--no-playlist',  # 不下载播放列表中的其他视频
-            link
-        ], check=True)
+        ]
+        
+        # 针对抖音添加特殊处理参数
+        if platform == 'douyin':
+            cmd.extend(['--referer', 'https://www.douyin.com/'])
+        
+        cmd.append(link)  # 添加链接
+        
+        subprocess.run(cmd, check=True)
         
         print(f"音频下载完成: {output_file}")
         return output_file, title
+    except subprocess.CalledProcessError as e:
+        print(f"下载视频音频时出错 (命令执行失败): {e}")
+        print(f"错误输出: {e.stderr}")
+        return None, None
     except Exception as e:
         print(f"下载视频音频时出错: {e}")
         return None, None
@@ -178,7 +212,12 @@ def save_to_markdown(transcript, title):
         
     # 创建安全的文件名
     safe_title = clean_filename(title)
-    md_file = f"{safe_title}.md"
+    
+    # 确保输出目录存在
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
+    # 在输出目录中创建Markdown文件
+    md_file = os.path.join(OUTPUT_DIR, f"{safe_title}.md")
     
     with open(md_file, "w", encoding="utf-8") as f:
         f.write(f"# {title}\n\n")
@@ -198,11 +237,36 @@ def main():
     temp_dir = "temp_audio"
     os.makedirs(temp_dir, exist_ok=True)
     
+    # 确保输出目录存在
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
     links = get_video_links()
     print(f"找到 {len(links)} 个视频链接")
     
-    for i, link in enumerate(links, 1):
-        print(f"\n处理视频 {i}/{len(links)}: {link}")
+    # 按平台分类链接
+    youtube_links = []
+    douyin_links = []
+    unknown_links = []
+    
+    for link in links:
+        platform = identify_platform(link)
+        if platform == 'youtube':
+            youtube_links.append(link)
+        elif platform == 'douyin':
+            douyin_links.append(link)
+        else:
+            unknown_links.append(link)
+    
+    print(f"YouTube链接: {len(youtube_links)}个")
+    print(f"抖音链接: {len(douyin_links)}个")
+    if unknown_links:
+        print(f"未知平台链接: {len(unknown_links)}个 (这些链接将被跳过)")
+    
+    # 处理所有有效链接
+    valid_links = youtube_links + douyin_links
+    
+    for i, link in enumerate(valid_links, 1):
+        print(f"\n处理视频 {i}/{len(valid_links)}: {link}")
         
         # 下载音频
         audio_file, title = download_audio(link, temp_dir)
@@ -232,6 +296,7 @@ def main():
         os.rmdir(temp_dir)
     
     print("\n所有视频处理完成!")
+    print(f"转录结果已保存到 {OUTPUT_DIR} 目录")
 
 if __name__ == "__main__":
     main() 
